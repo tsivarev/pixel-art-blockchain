@@ -11,12 +11,16 @@ import type {
   BlockBuilding,
   BlockEvent,
   Courier,
+  DroneActor,
+  MerchantCart,
+  RepairBot,
   ShardArea,
   StatsSnapshot,
   TileType,
   TxEvent,
   Validator,
   Vec2,
+  WalletActor,
 } from '../types'
 import { TileType as TileKind } from '../types'
 import { bfsPath } from './pathfinding'
@@ -37,6 +41,10 @@ export class WorldState {
   blocks: BlockBuilding[] = []
   couriers: Courier[] = []
   validators: Validator[] = []
+  wallets: WalletActor[] = []
+  drones: DroneActor[] = []
+  merchantCarts: MerchantCart[] = []
+  repairBots: RepairBot[] = []
   roads = new Set<string>()
 
   camera = { x: 0, y: 0, zoom: BASE_ZOOM }
@@ -63,6 +71,10 @@ export class WorldState {
     )
     this.shards.clear()
     this.roads.clear()
+    this.wallets = []
+    this.drones = []
+    this.merchantCarts = []
+    this.repairBots = []
 
     const centerX = Math.floor(WORLD_COLS / 2)
     const centerY = Math.floor(WORLD_ROWS / 2)
@@ -80,6 +92,7 @@ export class WorldState {
       this.connectRoad(centerX, centerY, def.x + 4, def.y + 3)
     }
 
+    this.spawnAmbientActors()
     this.shardCount = this.shards.size
   }
 
@@ -132,6 +145,14 @@ export class WorldState {
       frame: 0,
       frameTime: 0,
     })
+    this.repairBots.push({
+      id: `repair-${id}`,
+      x: x + 0.2,
+      y: y + 0.2,
+      targetBlockId: id,
+      orbitPhase: Math.random() * Math.PI * 2,
+      orbitRadius: 0.4 + Math.random() * 0.2,
+    })
     this.pushStats()
   }
 
@@ -165,6 +186,10 @@ export class WorldState {
         createdAt: Date.now(),
       })
       this.txTimestamps.push(Date.now())
+      this.spawnWalletNear(from.x, from.y)
+      if (Math.random() > 0.55) {
+        this.spawnMerchantCart(pathTiles.map((p) => ({ x: p.x, y: p.y })))
+      }
     }
 
     this.pushStats()
@@ -223,6 +248,63 @@ export class WorldState {
       }
 
       return courier.pathIndex < courier.path.length
+    })
+
+    this.merchantCarts = this.merchantCarts.filter((cart) => {
+      cart.ttl -= dt
+      if (cart.pathIndex >= cart.path.length || cart.ttl <= 0) return false
+      cart.frameTime += dt
+      if (cart.frameTime >= 0.2) {
+        cart.frameTime = 0
+        cart.frame = (cart.frame + 1) % 2
+      }
+
+      const target = cart.path[cart.pathIndex]
+      const dx = target.x - cart.x
+      const dy = target.y - cart.y
+      const dist = Math.hypot(dx, dy)
+      const step = cart.speed * dt
+      if (dist <= step) {
+        cart.x = target.x
+        cart.y = target.y
+        cart.pathIndex += 1
+      } else if (dist > 0) {
+        cart.x += (dx / dist) * step
+        cart.y += (dy / dist) * step
+      }
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        cart.direction = dx >= 0 ? 'right' : 'left'
+      } else {
+        cart.direction = dy >= 0 ? 'down' : 'up'
+      }
+      return cart.pathIndex < cart.path.length && cart.ttl > 0
+    })
+
+    for (const drone of this.drones) {
+      drone.angle += dt * drone.angularSpeed
+      drone.x = drone.anchorX + Math.cos(drone.angle) * drone.orbitRadius
+      drone.y = drone.anchorY + Math.sin(drone.angle * 0.9) * (drone.orbitRadius * 0.6)
+    }
+
+    this.repairBots = this.repairBots.filter((bot) => {
+      const targetBlock = this.blocks.find((block) => block.id === bot.targetBlockId)
+      if (!targetBlock || targetBlock.progress >= 1) return false
+      bot.orbitPhase += dt * 2.8
+      const radius = bot.orbitRadius
+      bot.x = targetBlock.x + Math.cos(bot.orbitPhase) * radius
+      bot.y = targetBlock.y + Math.sin(bot.orbitPhase * 0.8) * (radius * 0.65)
+      return true
+    })
+
+    this.wallets = this.wallets.filter((wallet) => {
+      wallet.ttl -= dt
+      wallet.phase += dt * (wallet.kind === 'hot' ? 2.4 : 1.7)
+      const swayX = Math.cos(wallet.phase) * 0.28
+      const swayY = Math.sin(wallet.phase * 0.8) * 0.2
+      wallet.x += (wallet.anchorX + swayX - wallet.x) * 0.14
+      wallet.y += (wallet.anchorY + swayY - wallet.y) * 0.14
+      return wallet.ttl > 0
     })
 
     this.pushStats()
@@ -293,6 +375,80 @@ export class WorldState {
 
   private buildWalkableMap(): boolean[][] {
     return this.tileMap.map((row) => row.map((tile) => tile !== TileKind.Water && tile !== TileKind.Dark))
+  }
+
+  private spawnWalletNear(tileX: number, tileY: number): void {
+    const x = tileX + (Math.random() * 0.8 - 0.4)
+    const y = tileY + (Math.random() * 0.8 - 0.4)
+    this.wallets.push({
+      id: `wallet-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+      x,
+      y,
+      anchorX: x,
+      anchorY: y,
+      phase: Math.random() * Math.PI * 2,
+      ttl: 10 + Math.random() * 12,
+      kind: Math.random() > 0.4 ? 'hot' : 'cold',
+    })
+    if (this.wallets.length > 30) {
+      this.wallets.splice(0, this.wallets.length - 30)
+    }
+  }
+
+  private spawnAmbientActors(): void {
+    const centerX = Math.floor(WORLD_COLS / 2)
+    const centerY = Math.floor(WORLD_ROWS / 2)
+    this.drones = [
+      {
+        id: 'drone-center',
+        x: centerX,
+        y: centerY - 2,
+        anchorX: centerX,
+        anchorY: centerY - 2,
+        orbitRadius: 1.2,
+        angle: 0,
+        angularSpeed: 1.2,
+      },
+      {
+        id: 'drone-east',
+        x: centerX + 8,
+        y: centerY,
+        anchorX: centerX + 8,
+        anchorY: centerY,
+        orbitRadius: 0.9,
+        angle: Math.PI / 2,
+        angularSpeed: 1.5,
+      },
+      {
+        id: 'drone-west',
+        x: centerX - 8,
+        y: centerY,
+        anchorX: centerX - 8,
+        anchorY: centerY,
+        orbitRadius: 0.9,
+        angle: Math.PI,
+        angularSpeed: 1.35,
+      },
+    ]
+  }
+
+  private spawnMerchantCart(path: Vec2[]): void {
+    if (path.length < 2) return
+    this.merchantCarts.push({
+      id: `cart-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+      x: path[0].x,
+      y: path[0].y,
+      path,
+      pathIndex: 1,
+      speed: 1.6 + Math.random() * 0.5,
+      direction: 'down',
+      frame: 0,
+      frameTime: 0,
+      ttl: 26 + Math.random() * 10,
+    })
+    if (this.merchantCarts.length > 10) {
+      this.merchantCarts.splice(0, this.merchantCarts.length - 10)
+    }
   }
 }
 

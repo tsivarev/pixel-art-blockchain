@@ -53,6 +53,50 @@ export type Validator = {
   frame: number
 }
 
+export type WalletActor = {
+  id: string
+  x: number
+  y: number
+  anchorX: number
+  anchorY: number
+  phase: number
+  ttl: number
+  kind: 'hot' | 'cold'
+}
+
+export type DroneActor = {
+  id: string
+  x: number
+  y: number
+  anchorX: number
+  anchorY: number
+  orbitRadius: number
+  angle: number
+  angularSpeed: number
+}
+
+export type MerchantCart = {
+  id: string
+  x: number
+  y: number
+  path: Vec2[]
+  pathIndex: number
+  speed: number
+  direction: 'up' | 'down' | 'left' | 'right'
+  frame: number
+  frameTime: number
+  ttl: number
+}
+
+export type RepairBot = {
+  id: string
+  x: number
+  y: number
+  targetBlockId: string
+  orbitPhase: number
+  orbitRadius: number
+}
+
 export type ShardArea = {
   id: string
   x: number

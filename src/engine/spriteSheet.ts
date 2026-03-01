@@ -50,6 +50,7 @@ export class SpriteSheet {
 
       if (frame.removeCheckerboard ?? true) {
         removeCheckerboardBackground(sourceCtx, frame.w, frame.h)
+        removeBorderBackground(sourceCtx, frame.w, frame.h)
       }
 
       const bounds = frame.autoTrim === false ? null : findOpaqueBounds(sourceCtx, frame.w, frame.h)
@@ -178,6 +179,103 @@ function removeCheckerboardBackground(
     if (isBackground) {
       pixels[i + 3] = 0
     }
+  }
+
+  ctx.putImageData(data, 0, 0)
+}
+
+function removeBorderBackground(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+): void {
+  const data = ctx.getImageData(0, 0, width, height)
+  const pixels = data.data
+  const borderHist = new Map<string, { r: number; g: number; b: number; count: number }>()
+
+  const addBorderPixel = (x: number, y: number): void => {
+    const i = (y * width + x) * 4
+    if (pixels[i + 3] <= 10) return
+    const r = pixels[i]
+    const g = pixels[i + 1]
+    const b = pixels[i + 2]
+    const qr = Math.round(r / 12) * 12
+    const qg = Math.round(g / 12) * 12
+    const qb = Math.round(b / 12) * 12
+    const key = `${qr},${qg},${qb}`
+    const hit = borderHist.get(key)
+    if (hit) {
+      hit.count += 1
+    } else {
+      borderHist.set(key, { r: qr, g: qg, b: qb, count: 1 })
+    }
+  }
+
+  for (let x = 0; x < width; x += 1) {
+    addBorderPixel(x, 0)
+    addBorderPixel(x, height - 1)
+  }
+  for (let y = 0; y < height; y += 1) {
+    addBorderPixel(0, y)
+    addBorderPixel(width - 1, y)
+  }
+
+  const borderColors = Array.from(borderHist.values())
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 6)
+  if (borderColors.length === 0) return
+
+  const visited = new Uint8Array(width * height)
+  const queueX = new Int16Array(width * height)
+  const queueY = new Int16Array(width * height)
+  let head = 0
+  let tail = 0
+
+  const isBackgroundLike = (x: number, y: number): boolean => {
+    const i = (y * width + x) * 4
+    if (pixels[i + 3] <= 10) return false
+    const r = pixels[i]
+    const g = pixels[i + 1]
+    const b = pixels[i + 2]
+    for (const c of borderColors) {
+      const dist = Math.abs(r - c.r) + Math.abs(g - c.g) + Math.abs(b - c.b)
+      if (dist <= 42) return true
+    }
+    return false
+  }
+
+  const tryPush = (x: number, y: number): void => {
+    if (x < 0 || y < 0 || x >= width || y >= height) return
+    const idx = y * width + x
+    if (visited[idx]) return
+    visited[idx] = 1
+    if (!isBackgroundLike(x, y)) return
+    queueX[tail] = x
+    queueY[tail] = y
+    tail += 1
+  }
+
+  for (let x = 0; x < width; x += 1) {
+    tryPush(x, 0)
+    tryPush(x, height - 1)
+  }
+  for (let y = 0; y < height; y += 1) {
+    tryPush(0, y)
+    tryPush(width - 1, y)
+  }
+
+  while (head < tail) {
+    const x = queueX[head]
+    const y = queueY[head]
+    head += 1
+
+    const i = (y * width + x) * 4
+    pixels[i + 3] = 0
+
+    tryPush(x + 1, y)
+    tryPush(x - 1, y)
+    tryPush(x, y + 1)
+    tryPush(x, y - 1)
   }
 
   ctx.putImageData(data, 0, 0)
